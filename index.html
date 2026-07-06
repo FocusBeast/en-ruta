@@ -145,6 +145,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .confetti{position:fixed;inset:0;z-index:50;pointer-events:none;overflow:hidden}
 .conf{position:absolute;width:9px;height:14px;top:-20px;border-radius:2px}
 @keyframes drop{to{transform:translateY(112vh) rotate(720deg);opacity:.3}}
+.nboard{margin:8px auto;max-width:360px}
+.blabel{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:14px 0 8px;text-align:center}
+.bgrid{display:grid;grid-template-columns:repeat(10,1fr);gap:3px;max-width:360px;margin:0 auto}
+.bc{aspect-ratio:1;border-radius:4px;background:rgba(79,240,255,.08);border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;font-size:12px;font-weight:800;cursor:default;color:#fff}
+.bc.ship{background:#5a6b8c;border-color:#7d90b5}
+.bc.hit{background:var(--bad)}
+.bc.miss{background:rgba(255,255,255,.16);color:var(--muted)}
+.bc.aim{cursor:crosshair;border-color:rgba(79,240,255,.4)}
+.bc.aim:active{background:rgba(79,240,255,.25)}
+.navBar{display:flex;gap:7px;justify-content:center;flex-wrap:wrap;margin:10px 0}
+.shipChip{padding:8px 12px;border-radius:11px;border:1px solid var(--stroke);background:var(--glass);color:var(--ink);font-weight:700;font-size:13px;cursor:pointer}
+.shipChip.sel{background:linear-gradient(100deg,#4ff0ff,#ff6ec7);color:#12071f;border-color:transparent}
+.shipChip.done{opacity:.4;text-decoration:line-through}
+.turnTag2{text-align:center;font-weight:800;font-size:16px;margin:12px 0}
+.turnTag2.you{color:var(--good)}
+.turnTag2.opp{color:var(--muted)}
 .hidden{display:none!important}
 </style>
 </head>
@@ -169,6 +185,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
         <div class="mi">🌐</div>
         <div class="mt">Sala multijugador <span class="pill-live">EN VIVO</span></div>
         <div class="md">Cada uno desde su propio celular con un código de sala. Votan y contestan en secreto y se revela junto. Necesita señal.</div>
+      </div>
+      <div class="modeCard" onclick="openNavalEntry()">
+        <div class="mi">⚓</div>
+        <div class="mt">Batalla Naval <span class="pill-live">1 vs 1</span></div>
+        <div class="md">Tú contra un rival, cada uno en su celular. Coloca tu flota y húndele los barcos por turnos. Necesita señal.</div>
       </div>
     </div>
   </section>
@@ -270,6 +291,26 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     </div>
     <div class="scroll" id="rplayBody"></div>
   </section>
+  <!-- ===== NAVAL ENTRY ===== -->
+  <section class="view" id="nentry">
+    <div class="bar"><button class="bk" onclick="go('menu')">←</button><div class="ttl">⚓ Batalla Naval</div></div>
+    <div class="scroll">
+      <div class="lbl">Tu nombre</div>
+      <div class="pRow"><input type="text" id="nName" maxlength="14" placeholder="Escribe tu nombre"></div>
+      <button class="big" id="nCreateBtn" style="margin-top:16px">🚢 Crear partida nueva</button>
+      <div class="secTtl" style="text-align:center">— o únete a una —</div>
+      <div class="lbl">Código de la partida</div>
+      <input type="text" id="nJoinCode" class="codeInput" maxlength="4" placeholder="ABCD">
+      <button class="big ghost" id="nJoinBtn" style="margin-top:14px">🚪 Entrar</button>
+      <div class="status" id="nStatus"></div>
+    </div>
+  </section>
+  <!-- ===== NAVAL PLAY ===== -->
+  <section class="view" id="nplay">
+    <div class="bar"><button class="bk" onclick="leaveNaval()">✕</button><div class="ttl" id="nplayTtl">⚓ Batalla Naval</div></div>
+    <div class="scroll" id="nplayBody"></div>
+  </section>
+
 </div>
 
 <!-- ranking modal (offline) -->
@@ -754,6 +795,91 @@ function openMpRank(){const s=STATE;if(!s||!s.players)return;const ranked=[...s.
   document.getElementById('mpRankList').innerHTML=h;document.getElementById('mpRankModal').classList.add('on');}
 function closeMpRank(){document.getElementById('mpRankModal').classList.remove('on');}
 function confettiRoom(c){confetti(c||'#4ff0ff');}
+
+/* ================= BATALLA NAVAL (1 vs 1, Supabase Realtime) ================= */
+let nch=null, NS=null;
+const SHIPS=[{n:'Portaaviones',s:5},{n:'Acorazado',s:4},{n:'Crucero',s:3},{n:'Submarino',s:3},{n:'Destructor',s:2}];
+const NTOTAL=SHIPS.reduce((a,s)=>a+s.s,0);
+function emptyBoard(){return Array.from({length:10},()=>Array(10).fill(-1));}
+function emptyShots(){return Array.from({length:10},()=>Array(10).fill(0));}
+function openNavalEntry(){document.getElementById('nStatus').textContent='';document.getElementById('nJoinCode').value='';go('nentry');}
+document.getElementById('nCreateBtn').onclick=()=>{const nm=document.getElementById('nName').value.trim();if(!nm){alert('Escribe tu nombre 🙂');return;}navConnect(randCode(),nm,true);};
+document.getElementById('nJoinBtn').onclick=()=>{const nm=document.getElementById('nName').value.trim();const cd=document.getElementById('nJoinCode').value.trim().toUpperCase();if(!nm){alert('Escribe tu nombre 🙂');return;}if(cd.length!==4){alert('El código son 4 letras');return;}navConnect(cd,nm,false);};
+function autoPlace(){NS.board=emptyBoard();NS.ships=[];
+  SHIPS.forEach(sp=>{let placed=false,t=0;while(!placed&&t<600){t++;const hor=Math.random()<.5,r=Math.random()*10|0,c=Math.random()*10|0,cells=[];let ok=true;
+    for(let k=0;k<sp.s;k++){const rr=hor?r:r+k,cc=hor?c+k:c;if(rr>9||cc>9||NS.board[rr][cc]!==-1){ok=false;break;}cells.push([rr,cc]);}
+    if(ok){cells.forEach(([rr,cc])=>NS.board[rr][cc]=sp.n);NS.ships.push({n:sp.n,s:sp.s,cells});placed=true;}}});}
+function navConnect(code,name,host){
+  sbInit();
+  const me={id:'n_'+Math.random().toString(36).slice(2,9),name:name,role:host?'p1':'p2'};
+  NS={code,me,host,phase:'place',board:emptyBoard(),ships:[],myHits:{},myMiss:{},shots:emptyShots(),turn:false,myReady:false,oppReady:false,oppName:null,oppId:null,over:false,won:false,sel:0,orient:'h'};
+  autoPlace();
+  document.getElementById('nStatus').textContent='Conectando…';
+  if(nch){try{nch.unsubscribe();}catch(e){}}
+  nch=sb.channel('naval-'+code,{config:{broadcast:{self:false},presence:{key:me.id}}});
+  nch.on('presence',{event:'sync'},navPresence);
+  nch.on('broadcast',{event:'nhello'},({payload})=>{NS.oppName=payload.name;NS.oppId=payload.id;if(NS.host)navSend('nhello',{name:NS.me.name,id:NS.me.id});navRender();});
+  nch.on('broadcast',{event:'nready'},()=>{NS.oppReady=true;navBeginIfReady();navRender();});
+  nch.on('broadcast',{event:'nfire'},({payload})=>navOnFire(payload));
+  nch.on('broadcast',{event:'nresult'},({payload})=>navOnResult(payload));
+  nch.on('broadcast',{event:'nrematch'},()=>navRematch(true));
+  nch.subscribe(async st=>{if(st==='SUBSCRIBED'){await nch.track(me);navSend('nhello',{name:me.name,id:me.id});document.getElementById('nStatus').textContent='';go('nplay');navRender();}
+    else if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'){document.getElementById('nStatus').textContent='⚠️ No se pudo conectar. Revisa la señal.';}});
+}
+function navPresence(){if(!nch)return;const s=nch.presenceState();const o=[];Object.values(s).forEach(a=>a.forEach(p=>{if(p.id!==NS.me.id)o.push(p);}));if(o.length){NS.oppName=o[0].name;NS.oppId=o[0].id;}navRender();}
+function navSend(ev,p){try{nch.send({type:'broadcast',event:ev,payload:p||{}});}catch(e){}}
+function leaveNaval(){try{if(nch){nch.unsubscribe();nch=null;}}catch(e){}NS=null;go('menu');}
+function removeShip(name){NS.ships=NS.ships.filter(s=>s.n!==name);for(let r=0;r<10;r++)for(let c=0;c<10;c++)if(NS.board[r][c]===name)NS.board[r][c]=-1;}
+function placeAt(r,c){if(NS.sel==null)return;const sp=SHIPS[NS.sel];if(NS.ships.some(s=>s.n===sp.n))removeShip(sp.n);
+  const cells=[];for(let k=0;k<sp.s;k++){const rr=NS.orient==='h'?r:r+k,cc=NS.orient==='h'?c+k:c;if(rr>9||cc>9||NS.board[rr][cc]!==-1){buzz(60);return;}cells.push([rr,cc]);}
+  cells.forEach(([rr,cc])=>NS.board[rr][cc]=sp.n);NS.ships.push({n:sp.n,s:sp.s,cells});buzz(15);
+  const next=SHIPS.findIndex(s=>!NS.ships.some(x=>x.n===s.n));NS.sel=next<0?null:next;navRender();}
+function navReady(){if(NS.ships.length<SHIPS.length){alert('Coloca los 5 barcos primero 🙂');return;}NS.myReady=true;navSend('nready');navBeginIfReady();navRender();}
+function navBeginIfReady(){if(NS.myReady&&NS.oppReady&&NS.phase!=='battle'){NS.phase='battle';NS.turn=NS.host;NS.over=false;}}
+function navFire(r,c){if(!NS.turn||NS.over||NS.shots[r][c]!==0)return;NS.turn=false;navSend('nfire',{r,c});buzz(20);navRender();}
+function navOnFire(p){if(NS.over)return;const r=p.r,c=p.c,name=NS.board[r][c];let hit=false,sunk=null;
+  if(name!==-1){hit=true;NS.myHits[r+'_'+c]=1;const ship=NS.ships.find(s=>s.n===name);if(ship&&ship.cells.every(([rr,cc])=>NS.myHits[rr+'_'+cc]))sunk=name;}
+  else NS.myMiss[r+'_'+c]=1;
+  const allSunk=Object.keys(NS.myHits).length>=NTOTAL;
+  if(allSunk){NS.over=true;NS.won=false;}
+  navSend('nresult',{r,c,hit,sunk,allSunk});
+  NS.turn=allSunk?false:true;buzz(hit?45:15);navRender();}
+function navOnResult(p){NS.shots[p.r][p.c]=p.hit?1:2;if(p.allSunk){NS.over=true;NS.won=true;confetti('#4ff0ff');buzz(120);}else buzz(p.hit?45:15);navRender();}
+function navRematch(fromOpp){NS.board=emptyBoard();NS.ships=[];NS.myHits={};NS.myMiss={};NS.shots=emptyShots();NS.turn=false;NS.myReady=false;NS.oppReady=false;NS.over=false;NS.won=false;NS.sel=0;NS.orient='h';NS.phase='place';autoPlace();if(!fromOpp)navSend('nrematch');navRender();}
+function navGridHTML(own){let h='<div class="bgrid">';
+  for(let r=0;r<10;r++)for(let c=0;c<10;c++){let cls='bc',txt='';
+    if(own){if(NS.myHits[r+'_'+c]){cls+=' hit';txt='✹';}else if(NS.myMiss[r+'_'+c]){cls+=' miss';txt='•';}else if(NS.board[r][c]!==-1)cls+=' ship';}
+    else{const s=NS.shots[r][c];if(s===1){cls+=' hit';txt='✹';}else if(s===2){cls+=' miss';txt='•';}if(NS.phase==='battle'&&NS.turn&&!NS.over&&s===0)cls+=' aim';}
+    h+='<div class="'+cls+'" data-r="'+r+'" data-c="'+c+'" data-own="'+(own?1:0)+'">'+txt+'</div>';}
+  return h+'</div>';}
+function navRender(){const b=document.getElementById('nplayBody');if(!b||!NS)return;
+  document.getElementById('nplayTtl').textContent='⚓ Batalla Naval'+(NS.code?(' · '+NS.code):'');
+  const opp=NS.oppName||'…';let h='';
+  if(NS.phase==='place'){
+    h+='<div class="status">Código: <b style="color:#4ff0ff;letter-spacing:.15em">'+NS.code+'</b> · Rival: <b>'+opp+'</b> '+(NS.oppName?'🟢':'⏳')+'</div>';
+    h+='<div class="blabel">🚢 Coloca tus barcos (elige uno, orientación y toca el tablero)</div>';
+    h+='<div class="navBar">';SHIPS.forEach((sp,i)=>{const done=NS.ships.some(s=>s.n===sp.n);h+='<button class="shipChip'+(NS.sel===i?' sel':'')+(done?' done':'')+'" data-si="'+i+'">'+sp.n+' ('+sp.s+')</button>';});h+='</div>';
+    h+='<div class="navBar"><button class="shipChip" id="nOrient">'+(NS.orient==='h'?'↔️ Horizontal':'↕️ Vertical')+'</button><button class="shipChip" id="nAuto">🎲 Auto</button><button class="shipChip" id="nClear">🧹 Limpiar</button></div>';
+    h+=navGridHTML(true);
+    if(NS.myReady)h+='<div class="turnTag2 opp">Esperando a que '+opp+' coloque su flota… ⏳</div>';
+    else h+='<div class="row2"><button class="big" id="nReady" style="flex:1"'+(NS.ships.length===SHIPS.length?'':' disabled')+'>✅ Listo para la batalla</button></div>';
+  } else {
+    h+='<div class="turnTag2 '+(NS.turn?'you':'opp')+'">'+(NS.over?'&nbsp;':(NS.turn?'🎯 Tu turno: dispara':'⏳ Turno de '+opp))+'</div>';
+    if(NS.over)h+='<div style="text-align:center;margin:4px 0 8px"><div class="crown">'+(NS.won?'🏆':'💥')+'</div><div class="wName">'+(NS.won?'¡Ganaste!':'Perdiste')+'</div><div class="wSub">'+(NS.won?('Hundiste la flota de '+opp):(opp+' hundió tu flota'))+'</div></div><div class="row2"><button class="big" id="nRematch" style="flex:1">🔄 Revancha</button><button class="big ghost" id="nExit" style="flex:1">Salir</button></div>';
+    h+='<div class="blabel">🎯 Flota de '+opp+'</div>'+navGridHTML(false);
+    h+='<div class="blabel" style="margin-top:16px">🛡️ Tu flota</div>'+navGridHTML(true);
+  }
+  b.innerHTML=h;navWire();}
+function navWire(){
+  document.querySelectorAll('.shipChip[data-si]').forEach(x=>x.onclick=()=>{NS.sel=+x.dataset.si;navRender();});
+  const o=document.getElementById('nOrient');if(o)o.onclick=()=>{NS.orient=NS.orient==='h'?'v':'h';navRender();};
+  const au=document.getElementById('nAuto');if(au)au.onclick=()=>{autoPlace();NS.sel=null;navRender();};
+  const cl=document.getElementById('nClear');if(cl)cl.onclick=()=>{NS.board=emptyBoard();NS.ships=[];NS.sel=0;navRender();};
+  const rd=document.getElementById('nReady');if(rd)rd.onclick=navReady;
+  const rm=document.getElementById('nRematch');if(rm)rm.onclick=()=>navRematch(false);
+  const ex=document.getElementById('nExit');if(ex)ex.onclick=leaveNaval;
+  document.querySelectorAll('.bc[data-own]').forEach(el=>el.onclick=()=>{const r=+el.dataset.r,c=+el.dataset.c,own=el.dataset.own==='1';
+    if(NS.phase==='place'&&own)placeAt(r,c);else if(NS.phase==='battle'&&!own)navFire(r,c);});}
 
 /* ================= ARRANQUE ================= */
 renderHome();
