@@ -316,7 +316,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
   </section>
   <!-- ===== NAVAL PLAY ===== -->
   <section class="view" id="nplay">
-    <div class="bar"><button class="bk" onclick="leaveNaval()">✕</button><div class="ttl" id="nplayTtl">⚓ Batalla Naval</div></div>
+    <div class="bar"><button class="bk" onclick="leaveNaval()">✕</button><div class="ttl" id="nplayTtl">⚓ Batalla Naval</div><div class="info" id="nConn" style="display:none;color:#ffd166">🔌</div></div>
     <div class="scroll" id="nplayBody"></div>
   </section>
 
@@ -808,6 +808,7 @@ function confettiRoom(c){confetti(c||'#4ff0ff');}
 /* ================= BATALLA NAVAL (1 vs 1, Supabase Realtime) ================= */
 let nch=null, NS=null, NDRAG=null;
 const FLEETS={
+ mini:{key:'mini',label:'🔬 Mini',size:6,ships:[['Crucero',3],['Lancha',2],['Bote',2]]},
  rapida:{key:'rapida',label:'⚡ Rápida',size:8,ships:[['Crucero',3],['Lancha',2],['Bote',2]]},
  normal:{key:'normal',label:'🚢 Normal',size:10,ships:[['Portaaviones',5],['Acorazado',4],['Crucero',3],['Submarino',3],['Destructor',2]]},
  epica:{key:'epica',label:'🔥 Épica',size:10,ships:[['Portaaviones',5],['Acorazado',4],['Crucero',3],['Submarino',3],['Destructor',2],['Fragata',3],['Patrullera',2]]}
@@ -841,23 +842,37 @@ function autoPlaceN(){NS.board=emptyGrid(NS.size);NS.ships=[];
   NS.defs.forEach(sp=>{let ok=false,t=0;while(!ok&&t<800){t++;const hor=Math.random()<.5,r=Math.random()*NS.size|0,c=Math.random()*NS.size|0,cells=[];let good=true;
     for(let k=0;k<sp.s;k++){const rr=hor?r:r+k,cc=hor?c+k:c;if(rr>=NS.size||cc>=NS.size||NS.board[rr][cc]!==-1){good=false;break;}cells.push([rr,cc]);}
     if(good){cells.forEach(([rr,cc])=>NS.board[rr][cc]=sp.n);NS.ships.push({n:sp.n,s:sp.s,cells});ok=true;}}});}
+function navStatus(t){var e=document.getElementById('nStatus');if(e)e.textContent=t;var b=document.getElementById('nConn');if(b){b.textContent=t;b.style.display=t?'inline-block':'none';}}
 function navConnect(code,name,host){
   sbInit();
   const me={id:'n_'+Math.random().toString(36).slice(2,9),name:name,role:host?'p1':'p2'};
   NS={code,me,host,phase:'place',fleet:null,size:8,total:0,defs:[],board:[],ships:[],myHits:{},myMiss:{},shots:[],turn:false,myReady:false,oppReady:false,oppName:null,oppId:null,over:false,won:false,sel:0,orient:'h'};
   if(host)navSetFleet(nFleetSel);
-  document.getElementById('nStatus').textContent='Conectando…';
+  navStatus('Conectando…');go('nplay');navRender();navBindChannel();
+}
+function navBindChannel(){
+  if(!NS||!sb)return;
+  try{sb.realtime.connect();}catch(e){}
   if(nch){try{nch.unsubscribe();}catch(e){}}
-  nch=sb.channel('naval-'+code,{config:{broadcast:{self:false},presence:{key:me.id}}});
+  nch=sb.channel('naval-'+NS.code,{config:{broadcast:{self:false},presence:{key:NS.me.id}}});
   nch.on('presence',{event:'sync'},navPresence);
   nch.on('broadcast',{event:'nhello'},({payload})=>{NS.oppName=payload.name;NS.oppId=payload.id;if(!NS.host&&payload.fleet&&!NS.fleet)navSetFleet(payload.fleet);if(NS.host)navSend('nhello',{name:NS.me.name,id:NS.me.id,fleet:NS.fleet});navRender();});
   nch.on('broadcast',{event:'nready'},()=>{NS.oppReady=true;navBeginIfReady();navRender();});
   nch.on('broadcast',{event:'nfire'},({payload})=>navOnFire(payload));
   nch.on('broadcast',{event:'nresult'},({payload})=>navOnResult(payload));
   nch.on('broadcast',{event:'nrematch'},({payload})=>{if(payload&&payload.fleet)navSetFleet(payload.fleet);navRematch(true);});
-  nch.subscribe(async st=>{if(st==='SUBSCRIBED'){await nch.track(me);navSend('nhello',{name:me.name,id:me.id,fleet:NS.host?NS.fleet:null});document.getElementById('nStatus').textContent='';go('nplay');navRender();}
-    else if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'){document.getElementById('nStatus').textContent='⚠️ No se pudo conectar. Revisa la señal.';}});
+  nch.on('broadcast',{event:'nsync'},({payload})=>{if(!NS)return;
+    if(NS.phase==='place'){if(payload.ready)NS.oppReady=true;navBeginIfReady();}
+    else if(NS.phase==='battle'){if(NS.turn&&payload.turn){if(!NS.host)NS.turn=false;}else if(!NS.turn&&!payload.turn){NS.turn=NS.host;}}
+    navRender();});
+  nch.subscribe(async st=>{
+    if(st==='SUBSCRIBED'){navStatus('');try{await nch.track(NS.me);}catch(e){}navSend('nhello',{name:NS.me.name,id:NS.me.id,fleet:NS.host?NS.fleet:null});navSend('nsync',{phase:NS.phase,ready:NS.myReady,turn:NS.turn});navRender();}
+    else if(st==='CHANNEL_ERROR'||st==='TIMED_OUT'||st==='CLOSED'){navStatus('🔌 Reconectando…');}
+  });
 }
+setInterval(function(){if(NS&&nch&&(nch.state==='closed'||nch.state==='errored')){navStatus('🔌 Reconectando…');navBindChannel();}},4000);
+window.addEventListener('online',function(){if(NS)navBindChannel();});
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&NS)navBindChannel();});
 function navPresence(){if(!nch||!NS)return;const s=nch.presenceState();const o=[];Object.values(s).forEach(a=>a.forEach(p=>{if(p.id!==NS.me.id)o.push(p);}));if(o.length){NS.oppName=o[0].name;NS.oppId=o[0].id;}navRender();}
 function navSend(ev,p){try{nch.send({type:'broadcast',event:ev,payload:p||{}});}catch(e){}}
 function leaveNaval(){try{if(nch){nch.unsubscribe();nch=null;}}catch(e){}NS=null;NDRAG=null;go('menu');}
@@ -867,7 +882,7 @@ function removeShipN(nm){NS.ships=NS.ships.filter(s=>s.n!==nm);for(let r=0;r<NS.
 function footprint(idx,r,c){const sp=NS.defs[idx],cells=[];for(let k=0;k<sp.s;k++)cells.push(NS.orient==='h'?[r,c+k]:[r+k,c]);return cells;}
 function validCells(cells){return cells.every(([r,c])=>r>=0&&r<NS.size&&c>=0&&c<NS.size&&NS.board[r][c]===-1);}
 function tryPlace(idx,r,c){const sp=NS.defs[idx];if(isPlaced(idx))removeShipN(sp.n);const cells=footprint(idx,r,c);if(!validCells(cells)){buzz(60);return false;}cells.forEach(([rr,cc])=>NS.board[rr][cc]=sp.n);NS.ships.push({n:sp.n,s:sp.s,cells});buzz(15);const nxt=NS.defs.findIndex(s=>!NS.ships.some(x=>x.n===s.n));NS.sel=nxt<0?idx:nxt;return true;}
-function navReady(){actx();if(NS.ships.length<NS.defs.length){alert('Coloca todos los barcos primero 🙂');return;}NS.myReady=true;navSend('nready');navBeginIfReady();navRender();}
+function navReady(){actx();if(NS.ships.length<NS.defs.length){alert('Coloca todos los barcos primero 🙂');return;}NS.myReady=true;navSend('nready');navBeginIfReady();navSend('nsync',{phase:NS.phase,ready:NS.myReady,turn:NS.turn});navRender();}
 function navBeginIfReady(){if(NS.myReady&&NS.oppReady&&NS.phase!=='battle'){NS.phase='battle';NS.turn=NS.host;NS.over=false;}}
 function navFire(r,c){if(!NS.turn||NS.over||NS.shots[r][c]!==0)return;actx();sfx('fire');NS.turn=false;navSend('nfire',{r,c});buzz(20);navRender();}
 function navOnFire(p){if(NS.over)return;const r=p.r,c=p.c,name=NS.board[r][c];let hit=false,sunk=null;
@@ -878,7 +893,7 @@ function navOnFire(p){if(NS.over)return;const r=p.r,c=p.c,name=NS.board[r][c];le
   if(allSunk){sfx('lose');navToast('💥 Te hundieron la flota');}else if(sunk){sfx('sunk');navToast('🚢 Te hundieron el '+sunk);}else if(hit){sfx('hit');}else{sfx('miss');}NS.turn=allSunk?false:true;buzz(hit?45:15);navRender();}
 function navOnResult(p){NS.shots[p.r][p.c]=p.hit?1:2;if(p.allSunk){NS.over=true;NS.won=true;confetti('#4ff0ff');buzz(120);sfx('win');navToast('🏆 ¡Hundiste toda la flota!');}else if(p.sunk){sfx('sunk');navToast('🎯 ¡Hundiste el '+p.sunk+'!');buzz(60);}else if(p.hit){sfx('hit');navToast('🔥 ¡Tocado!');buzz(45);}else{sfx('miss');buzz(15);}navRender();}
 function navRematch(fromOpp){const k=NS.fleet;NS.board=emptyGrid(NS.size);NS.ships=[];NS.myHits={};NS.myMiss={};NS.shots=emptyShotGrid(NS.size);NS.turn=false;NS.myReady=false;NS.oppReady=false;NS.over=false;NS.won=false;NS.sel=0;NS.orient='h';NS.phase='place';autoPlaceN();if(!fromOpp)navSend('nrematch',{fleet:k});navRender();}
-function navGridHTML(own){let h='<div class="bgrid" style="grid-template-columns:repeat('+NS.size+',1fr);max-width:'+(NS.size*38)+'px">';
+function navGridHTML(own,maxw){let h='<div class="bgrid" style="grid-template-columns:repeat('+NS.size+',1fr);max-width:'+(maxw||('min(92vw,'+(NS.size*40)+'px)'))+'">';
   for(let r=0;r<NS.size;r++)for(let c=0;c<NS.size;c++){let cls='bc',txt='';
     if(own){if(NS.myHits[r+'_'+c]){cls+=' hit';txt='✹';}else if(NS.myMiss[r+'_'+c]){cls+=' miss';txt='•';}else if(NS.board[r][c]!==-1)cls+=' ship';}
     else{const s=NS.shots[r][c];if(s===1){cls+=' hit';txt='✹';}else if(s===2){cls+=' miss';txt='•';}if(NS.phase==='battle'&&NS.turn&&!NS.over&&s===0)cls+=' aim';}
@@ -893,14 +908,14 @@ function navRender(){const b=document.getElementById('nplayBody');if(!b||!NS)ret
     h+='<div class="blabel">🚢 Arrastra un barco al tablero (o tócalo y toca dónde ponerlo)</div>';
     h+='<div class="navBar">';NS.defs.forEach((sp,i)=>{const done=isPlaced(i);h+='<button class="shipChip'+(NS.sel===i?' sel':'')+(done?' done':'')+'" data-si="'+i+'">'+sp.n+' ('+sp.s+')</button>';});h+='</div>';
     h+='<div class="navBar"><button class="shipChip" id="nOrient">'+(NS.orient==='h'?'↔️ Horizontal':'↕️ Vertical')+'</button><button class="shipChip" id="nAuto">🎲 Auto</button><button class="shipChip" id="nClear">🧹 Limpiar</button></div>';
-    h+=navGridHTML(true);
+    h+=navGridHTML(true,'min(92vw,'+(NS.size*40)+'px)');
     if(NS.myReady)h+='<div class="turnTag2 opp">Esperando a que '+opp+' coloque su flota… ⏳</div>';
     else h+='<div class="row2"><button class="big" id="nReady" style="flex:1"'+(NS.ships.length===NS.defs.length?'':' disabled')+'>✅ Listo para la batalla</button></div>';
   } else {
     h+='<div class="turnTag2 '+(NS.turn?'you':'opp')+'">'+(NS.over?'&nbsp;':(NS.turn?'🎯 Tu turno: dispara':'⏳ Turno de '+opp))+'</div>';
     if(NS.over)h+='<div style="text-align:center;margin:4px 0 8px"><div class="crown">'+(NS.won?'🏆':'💥')+'</div><div class="wName">'+(NS.won?'¡Ganaste!':'Perdiste')+'</div><div class="wSub">'+(NS.won?('Hundiste la flota de '+opp):(opp+' hundió tu flota'))+'</div></div><div class="row2"><button class="big" id="nRematch" style="flex:1">🔄 Revancha</button><button class="big ghost" id="nExit" style="flex:1">Salir</button></div>';
-    h+='<div class="blabel">🎯 Flota de '+opp+'</div>'+navGridHTML(false);
-    h+='<div class="blabel" style="margin-top:16px">🛡️ Tu flota</div>'+navGridHTML(true);
+    h+='<div class="blabel">🎯 Flota de '+opp+'</div>'+navGridHTML(false,'min(90vw,50vh,'+(NS.size*40)+'px)');
+    h+='<div class="blabel" style="margin-top:16px">🛡️ Tu flota</div>'+navGridHTML(true,'min(58vw,28vh,'+(NS.size*24)+'px)');
   }
   b.innerHTML=h;navWire();}
 function navWire(){
